@@ -1,0 +1,23 @@
+[
+  {
+    "name": "iso-echo",
+    "host": "127.0.0.2",
+    "port": 54344,
+    "protocol": "ISO8583",
+    "description": "ISO8583 ECHOTEST (TCP)"
+  },
+  {
+    "name": "webservice-ws",
+    "host": "127.0.0.3",
+    "port": 54343,
+    "protocol": "WEBSERVICE",
+    "description": "WebService (GET)"
+  },
+  {
+    "name": "rest-api",
+    "host": "127.0.0.4",
+    "port": 54342,
+    "protocol": "REST",
+    "description": "API-REST (GET)"
+  }
+]
