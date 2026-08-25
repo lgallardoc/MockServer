@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import net from 'net';
 import express from 'express';
 import bodyParser from 'body-parser';
@@ -6,18 +8,65 @@ import os from 'os';
 type Protocol = 'ISO8583' | 'WEBSERVICE' | 'REST';
 
 type ServerConfig = {
+  name?: string;
   host: string; // IP to bind (change to your target IPs for production)
   port: number;
   protocol: Protocol;
+  description?: string;
 };
 
-const configs: ServerConfig[] = [
-  // Defaults use loopback aliases for easy local testing.
-  // Change host values to 10.4.24.21/22/23 when deploying to target machine.
-  { host: '127.0.0.2', port: 54344, protocol: 'ISO8583' },   // ISO8583 ECHOTEST (TCP)
-  { host: '127.0.0.3', port: 54343, protocol: 'WEBSERVICE' }, // WebService (GET)
-  { host: '127.0.0.4', port: 54342, protocol: 'REST' }        // API-REST (GET)
-];
+const SUPPORTED_PROTOCOLS = ['ISO8583', 'WEBSERVICE', 'REST'] as const;
+function isValidProtocol(v: any): v is Protocol {
+  return typeof v === 'string' && (SUPPORTED_PROTOCOLS as readonly string[]).includes(v);
+}
+
+function validateConfigArray(obj: any): ServerConfig[] {
+  if (!Array.isArray(obj)) throw new Error('services.json must be an array');
+  return obj.map((item, idx) => {
+    if (typeof item !== 'object' || item === null) throw new Error(`invalid service at index ${idx}`);
+    const host = item.host;
+    const port = Number(item.port);
+    const protocol = item.protocol;
+    if (typeof host !== 'string' || host.length === 0) throw new Error(`invalid host for service index ${idx}`);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error(`invalid port for service index ${idx}`);
+    if (!isValidProtocol(protocol)) throw new Error(`invalid protocol for service index ${idx} - supported: ${SUPPORTED_PROTOCOLS.join(',')}`);
+    return {
+      name: item.name,
+      host,
+      port,
+      protocol,
+      description: item.description
+    } as ServerConfig;
+  });
+}
+
+function loadConfigs(): ServerConfig[] {
+  const cfgPath = process.env.SERVICE_CONFIG_PATH
+    ? path.resolve(process.env.SERVICE_CONFIG_PATH)
+    : path.resolve(process.cwd(), 'services.json');
+
+  if (!fs.existsSync(cfgPath)) {
+    throw new Error(`Configuration file not found: ${cfgPath}`);
+  }
+
+  try {
+    const raw = fs.readFileSync(cfgPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return validateConfigArray(parsed);
+  } catch (err) {
+    throw new Error(`Failed to load/parse ${cfgPath}: ${(err as Error).message}`);
+  }
+}
+
+// Cargamos configuración al inicio (fallamos si no existe o está mal formada)
+let configs: ServerConfig[] = [];
+try {
+  configs = loadConfigs();
+  console.log('Loaded service configs from file:', configs.map(s => `${s.name||s.protocol}@${s.host}:${s.port}`));
+} catch (err) {
+  console.error('Error loading service configuration:', (err as Error).message);
+  process.exit(1);
+}
 
 function osInfo() {
   return {
