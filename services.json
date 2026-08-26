@@ -4,7 +4,7 @@
     "host": "127.0.0.2",
     "port": 54344,
     "protocol": "ISO8583",
-    "headerType": "auto",
+    "headerType": "ascii4",
     "description": "ISO8583 ECHOTEST (TCP)",
     "responses": [
       {
