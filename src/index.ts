@@ -222,136 +222,161 @@ function startIso8583Server(host: string, port: number, cfg?: ServerConfig) {
     const remote = `${socket.remoteAddress}:${socket.remotePort}`;
     console.log(`[ISO8583] Connection from ${remote}`);
 
-    socket.on('data', async (data) => {
-      const buf: Buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
-      console.log(`[ISO8583] Raw data from ${remote}:`, buf.toString('hex'));
+  socket.on('data', async (data) => {
+  const buf: Buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
+  const recvHex = buf.toString('hex');
+  console.log(`[ISO8583] Raw bytes received from ${remote}: ${recvHex}`);
 
+  try {
+    const headerPref = (cfg && cfg.headerType) ? cfg.headerType : 'auto';
+    const parsedFrame = parseIsoMessage(buf, headerPref);
+    const headerTypeUsed = parsedFrame.headerType as 'ascii4' | 'bin16' | 'none';
+    const msg: Buffer = parsedFrame.msg;
+
+    console.log(`[ISO8583] Frame parsed: headerType=${headerTypeUsed} headerBytes=${parsedFrame.headerBytes} indicatedLength=${parsedFrame.length} actualPayloadLen=${msg.length}`);
+    console.log(`[ISO8583] Payload (hex): ${msg.toString('hex')}`);
+    console.log(`[ISO8583] Payload (ascii): ${msg.toString('ascii')}`);
+
+    if (!msg || msg.length === 0) {
+      console.warn('[ISO8583] empty payload after framing - ignoring');
+      return;
+    }
+
+    // parse with iso_8583 if available
+    let parsedFields: Record<number, string> = {};
+    let mti: string | undefined;
+
+    if (Iso8583Pkg) {
       try {
-        const headerPref = (cfg && cfg.headerType) ? cfg.headerType : 'auto';
-        const parsedFrame = parseIsoMessage(buf, headerPref);
-        const headerTypeUsed = parsedFrame.headerType as 'ascii4' | 'bin16' | 'none';
-        const msg: Buffer = parsedFrame.msg;
-
-        if (!msg || msg.length === 0) {
-          console.warn('[ISO8583] empty payload after framing');
-          return;
-        }
-
-        // parse with iso_8583 if available
-        let parsedFields: Record<number, string> = {};
-        let mti: string | undefined;
-
-        if (Iso8583Pkg) {
+        const isoInstance = new Iso8583Pkg();
+        let isoJson: any = null;
+        try {
+          isoJson = isoInstance.getIsoJSON(msg.toString('ascii'));
+        } catch (e1) {
           try {
-            const isoInstance = new Iso8583Pkg();
-            let isoJson: any = null;
-            // try ascii
-            try {
-              isoJson = isoInstance.getIsoJSON(msg.toString('ascii'));
-            } catch (e1) {
-              try {
-                isoJson = isoInstance.getIsoJSON(msg.toString('hex'));
-              } catch (e2) {
-                isoJson = null;
-              }
-            }
-            if (isoJson) {
-              mti = isoJson['0'] || isoJson['mti'] || isoJson['MTI'] || isoJson.mti;
-              for (const k of Object.keys(isoJson)) {
-                const ki = Number(k);
-                if (!Number.isNaN(ki)) parsedFields[ki] = String(isoJson[k]);
-              }
-            }
-          } catch (err) {
-            console.warn('[ISO8583] iso_8583 parse error, falling back:', (err as Error).message);
-            Iso8583Pkg = null;
+            isoJson = isoInstance.getIsoJSON(msg.toString('hex'));
+          } catch (e2) {
+            isoJson = null;
           }
         }
-
-        if (!mti) {
-          if (msg.length >= 4) {
-            const maybeMti = msg.slice(0, 4).toString('ascii');
-            if (/^\d{4}$/.test(maybeMti)) mti = maybeMti;
+        if (isoJson) {
+          mti = isoJson['0'] || isoJson['mti'] || isoJson['MTI'] || isoJson.mti;
+          for (const k of Object.keys(isoJson)) {
+            const ki = Number(k);
+            if (!Number.isNaN(ki)) parsedFields[ki] = String(isoJson[k]);
           }
-        }
-
-        const svc = cfg || configs.find(s => s.host === host && s.port === port);
-        const rules = svc && svc.responses ? [...svc.responses].sort((a,b) => (b.priority||0)-(a.priority||0)) : [];
-
-        let applied = false;
-        if (rules.length > 0) {
-          for (const rule of rules) {
-            if (matchRule(parsedFields, rule)) {
-              const respFields: Record<number, string> = rule.keepFields ? { ...parsedFields } : {};
-              if (rule.setFields) {
-                for (const k of Object.keys(rule.setFields)) {
-                  respFields[Number(k)] = String(rule.setFields[k]);
-                }
-              }
-              if (!respFields[0] && mti === '0800') respFields[0] = '0810';
-
-              // try build with iso lib
-              const built = await buildResponseBufferWithIso(respFields);
-              if (built) {
-                const framed = buildIsoResponse(built, headerTypeUsed);
-                socket.write(framed);
-                applied = true;
-                console.log(`[ISO8583] Applied rule ${rule.name} and sent framed response to ${remote}`);
-                break;
-              }
-
-              // fallback raw construction
-              const outMti = respFields[0] || (mti === '0800' ? '0810' : (mti || '0810'));
-              const restParts: string[] = [];
-              for (const fk of Object.keys(respFields)) {
-                if (Number(fk) === 0) continue;
-                restParts.push(String(respFields[Number(fk)]));
-              }
-              const payload = Buffer.from(outMti + restParts.join(''), 'ascii');
-              const framed = buildIsoResponse(payload, headerTypeUsed);
-              socket.write(framed);
-              applied = true;
-              break;
-            }
-          }
-        }
-
-        if (!applied) {
-          if (mti === '0800') {
-            if (Iso8583Pkg && Object.keys(parsedFields).length > 0) {
-              try {
-                const respFields = { ...parsedFields, 0: '0810' } as Record<number,string>;
-                const built = await buildResponseBufferWithIso(respFields);
-                if (built) {
-                  const framed = buildIsoResponse(built, headerTypeUsed);
-                  socket.write(framed);
-                  console.log(`[ISO8583] Sent 0810 (parser-built) to ${remote}`);
-                } else {
-                  const rest = msg.slice(4);
-                  const respMsg = Buffer.concat([Buffer.from('0810', 'ascii'), rest]);
-                  socket.write(buildIsoResponse(respMsg, headerTypeUsed));
-                }
-              } catch (_) {
-                const rest = msg.slice(4);
-                const respMsg = Buffer.concat([Buffer.from('0810', 'ascii'), rest]);
-                socket.write(buildIsoResponse(respMsg, headerTypeUsed));
-              }
-            } else {
-              const rest = msg.slice(4);
-              const respMsg = Buffer.concat([Buffer.from('0810', 'ascii'), rest]);
-              socket.write(buildIsoResponse(respMsg, headerTypeUsed));
-            }
-          } else if (msg.toString('utf8').includes('ECHOTEST')) {
-            socket.write('ECHOTEST\r\n');
-          } else {
-            const framed = buildIsoResponse(msg, headerTypeUsed);
-            socket.write(framed);
-          }
+          console.log('[ISO8583] Parser result (iso_8583):', JSON.stringify({ mti, fields: parsedFields }, null, 2));
+        } else {
+          console.log('[ISO8583] iso_8583 did not return parsed JSON for this payload');
         }
       } catch (err) {
-        console.error('[ISO8583] Processing error:', (err as Error).message);
+        console.warn('[ISO8583] iso_8583 parse error, will fallback to simple MTI detection:', (err as Error).message);
+        Iso8583Pkg = null;
       }
-    });
+    }
+
+    // If parser not set or failed, try simple MTI detection
+    if (!mti && msg.length >= 4) {
+      const maybeMti = msg.slice(0, 4).toString('ascii');
+      if (/^\d{4}$/.test(maybeMti)) {
+        mti = maybeMti;
+        console.log(`[ISO8583] Detected MTI from ASCII: ${mti}`);
+      }
+    }
+
+    // prepare rules and evaluate
+    const svc = cfg || configs.find(s => s.host === host && s.port === port);
+    const rules = svc && svc.responses ? [...svc.responses].sort((a,b) => (b.priority||0)-(a.priority||0)) : [];
+    console.log(`[ISO8583] Evaluating ${rules.length} response rule(s) (by priority)`);
+
+    let applied = false;
+    let chosenRuleName: string | null = null;
+    let responseBuffer: Buffer | null = null;
+
+    if (rules.length > 0) {
+      for (const rule of rules) {
+        if (matchRule(parsedFields, rule)) {
+          chosenRuleName = rule.name || '(unnamed)';
+          console.log(`[ISO8583] Rule matched: ${chosenRuleName}`);
+          const respFields: Record<number, string> = rule.keepFields ? { ...parsedFields } : {};
+          if (rule.setFields) {
+            for (const k of Object.keys(rule.setFields)) {
+              respFields[Number(k)] = String(rule.setFields[k]);
+            }
+          }
+          if (!respFields[0] && mti === '0800') respFields[0] = '0810';
+
+          // try to build response using iso lib
+          const built = await buildResponseBufferWithIso(respFields);
+          if (built) {
+            responseBuffer = built;
+            console.log('[ISO8583] Built response via iso_8583 (hex):', built.toString('hex'));
+          } else {
+            // fallback naive builder: MTI + concatenated other fields as ascii
+            const outMti = respFields[0] || (mti === '0800' ? '0810' : (mti || '0810'));
+            const restParts: string[] = [];
+            for (const fk of Object.keys(respFields)) {
+              if (Number(fk) === 0) continue;
+              restParts.push(String(respFields[Number(fk)]));
+            }
+            responseBuffer = Buffer.from(outMti + restParts.join(''), 'ascii');
+            console.log('[ISO8583] Built fallback response (ascii) hex:', responseBuffer.toString('hex'));
+          }
+
+          applied = true;
+          break;
+        }
+      }
+    }
+
+    // no rule matched => default behaviors
+    if (!applied) {
+      if (mti === '0800') {
+        console.log('[ISO8583] Default: received MTI 0800 — will respond 0810');
+        if (Iso8583Pkg && Object.keys(parsedFields).length > 0) {
+          const respFields = { ...parsedFields, 0: '0810' } as Record<number,string>;
+          const built = await buildResponseBufferWithIso(respFields);
+          if (built) {
+            responseBuffer = built;
+            console.log('[ISO8583] Built 0810 via iso_8583 (hex):', built.toString('hex'));
+          } else {
+            const rest = msg.slice(4);
+            responseBuffer = Buffer.concat([Buffer.from('0810','ascii'), rest]);
+            console.log('[ISO8583] Built 0810 fallback (hex):', responseBuffer.toString('hex'));
+          }
+        } else {
+          const rest = msg.slice(4);
+          responseBuffer = Buffer.concat([Buffer.from('0810','ascii'), rest]);
+          console.log('[ISO8583] Built 0810 fallback (hex):', responseBuffer.toString('hex'));
+        }
+      } else if (msg.toString('utf8').includes('ECHOTEST')) {
+        responseBuffer = Buffer.from('ECHOTEST\r\n', 'ascii');
+        console.log('[ISO8583] ECHOTEST legacy response prepared');
+      } else {
+        responseBuffer = msg;
+        console.log('[ISO8583] No rule or special MTI: echoing payload (hex):', responseBuffer.toString('hex'));
+      }
+    }
+
+    // final: frame response with same header type and send (log request/response)
+    if (responseBuffer) {
+      const framed = buildIsoResponse(responseBuffer, headerTypeUsed);
+      console.log(`[ISO8583] Sending framed response to ${remote} headerType=${headerTypeUsed} totalBytes=${framed.length}`);
+      console.log(`[ISO8583] Response (framed hex): ${framed.toString('hex')}`);
+      try {
+        socket.write(framed);
+        console.log('[ISO8583] Response sent successfully');
+      } catch (err) {
+        console.error('[ISO8583] Error writing response to socket:', (err as Error).message);
+      }
+    } else {
+      console.warn('[ISO8583] No responseBuffer built (unexpected).');
+    }
+
+  } catch (err) {
+    console.error('[ISO8583] Processing error:', (err as Error).message);
+  }
+});
 
     socket.on('close', () => console.log(`[ISO8583] Closed ${remote}`));
     socket.on('error', (err) => console.error(`[ISO8583] Socket error ${remote}:`, err));
