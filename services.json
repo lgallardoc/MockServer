@@ -4,7 +4,23 @@
     "host": "127.0.0.2",
     "port": 54344,
     "protocol": "ISO8583",
-    "description": "ISO8583 ECHOTEST (TCP)"
+    "headerType": "auto",
+    "description": "ISO8583 ECHOTEST (TCP)",
+    "responses": [
+      {
+        "name": "0810-on-0800",
+        "when": [ { "field": 0, "equals": "0800" } ],
+        "setFields": { "0": "0810" },
+        "keepFields": true,
+        "priority": 10
+      },
+      {
+        "name": "ok-on-39",
+        "when": [ { "field": 39, "equals": "00" } ],
+        "setFields": { "0": "0810", "39": "00", "44": "Respuesta OK" },
+        "priority": 5
+      }
+    ]
   },
   {
     "name": "webservice-ws",
