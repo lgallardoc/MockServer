@@ -58,7 +58,7 @@ if [[ "$stop_occupied" == "--stop-occupied" ]]; then
         [[ -z "$process_id" || "$process_id" == "$$" ]] && continue
         echo "Deteniendo PID $process_id de MockServer..."
         kill "$process_id"
-      done < <(ps -ef | awk -v directory="$project_dir" '$0 ~ directory && $0 ~ /(node dist\/index\.js|tsx.*src\/index\.ts)/ { print $2 }')
+      done < <(ps -ef | awk -v directory="$project_dir" '$0 ~ directory && $0 ~ /(node dist\/index\.js|ts-node.*src\/index\.ts)/ { print $2 }')
     }
   fi
 

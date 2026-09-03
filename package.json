@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts",
+    "dev": "ts-node src/index.ts",
     "check:listeners": "node scripts/check-listeners.js",
     "launch:dev": "bash scripts/start-mockserver.sh dev",
     "launch:dev:clean": "bash scripts/start-mockserver.sh dev --stop-occupied",
@@ -26,7 +26,7 @@
   "devDependencies": {
     "@types/express": "^4.17.17",
     "@types/node": "^20.5.1",
-    "tsx": "^3.14.0",
+    "ts-node": "^10.9.2",
     "typescript": "^5.4.2"
   }
 }
