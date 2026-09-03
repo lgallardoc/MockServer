@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "check:listeners": "node scripts/check-listeners.js",
     "launch:dev": "bash scripts/start-mockserver.sh dev",
     "launch:dev:clean": "bash scripts/start-mockserver.sh dev --stop-occupied",
@@ -20,10 +20,13 @@
     "express": "^4.18.2",
     "iso_8583": "^2.6.7"
   },
+  "overrides": {
+    "xmldom": "^0.6.0"
+  },
   "devDependencies": {
     "@types/express": "^4.17.17",
     "@types/node": "^20.5.1",
-    "ts-node-dev": "^2.0.0",
+    "tsx": "^3.14.0",
     "typescript": "^5.4.2"
   }
 }

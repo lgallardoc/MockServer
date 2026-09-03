@@ -179,6 +179,39 @@ Notas sobre IBM i (v7.4 / v7.5)
   pm2 logs mock-server
   ```
 
+### Crear proxy reverso para IBM i
+
+#### Paso 1: levantar el túnel desde tu computadora local
+
+Necesitas tener acceso SSH a tu IBM i desde tu PC a través del puerto SSH de la máquina, usualmente el `22`.
+
+Abre la terminal de tu computadora, por ejemplo PowerShell en Windows o Terminal en macOS/Linux, y ejecuta:
+
+```sh
+ssh -R 1080 -N -f lagallardoc@TU_IP_IBM_I
+```
+
+Reemplaza `lagallardoc@TU_IP_IBM_I` con tu usuario y la IP o host de tu partición de IBM i.
+
+Parámetros usados:
+
+- `-R 1080`: crea un túnel reverso. Le dice al IBM i que abra el puerto `1080` en su propio localhost (`127.0.0.1`) y que todo el tráfico enviado a ese puerto sea redirigido de vuelta a tu computadora local.
+- `-N`: indica a SSH que no ejecute ningún comando remoto; solo establece el túnel.
+- `-f`: opcional. Ejecuta el proceso en segundo plano en tu PC para que puedas seguir usando la terminal.
+
+#### Paso 2: configurar las herramientas en IBM i
+
+Con el puerto `1080` del IBM i escuchando y reenviando tráfico a tu computadora, indica a las aplicaciones Open Source en iSeries que usen ese proxy.
+
+Conéctate a tu terminal del IBM i, por ejemplo con VS Code Code for IBM i o SSH, y configura las variables de entorno de red de tu sesión PASE:
+
+```sh
+export http_proxy=socks5h://127.0.0.1:1080
+export https_proxy=socks5h://127.0.0.1:1080
+```
+
+El prefijo `socks5h://` es importante porque delega también la resolución DNS a tu computadora local, evitando fallos de DNS en la red interna del iSeries.
+
 Errores comunes
 ---------------
 - EADDRNOTAVAIL: la IP indicada no está presente en la máquina. Asignala o usa `0.0.0.0`.
