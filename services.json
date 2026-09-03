@@ -30,6 +30,13 @@
     "description": "WebService (GET)"
   },
   {
+    "name": "az7-cuenta-tarjeta",
+    "host": "0.0.0.0",
+    "port": 40013,
+    "protocol": "WEBSERVICE",
+    "description": "SOAP AZ7_CUENTA_TARJETA"
+  },
+  {
     "name": "rest-api",
     "host": "127.0.0.4",
     "port": 54342,

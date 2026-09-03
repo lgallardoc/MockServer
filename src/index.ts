@@ -27,6 +27,10 @@ type ServerConfig = {
   responses?: ResponseRule[];
 };
 
+const AZ7_CUENTA_TARJETA_PATH = '/web/services/AZ7_CUENTA_TARJETAService/AZ7_CUENTA_TARJETA';
+const AZ7_CUENTA_TARJETA_NAMESPACE = 'http://az7_cuenta_tarjeta.wsbeans.iseries/';
+const AZ7_CUENTA_TARJETA_RESPONSE = `<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"><soap:Body><ns2:pgmactResponse xmlns:ns2="${AZ7_CUENTA_TARJETA_NAMESPACE}"><return><AUTORIZACION></AUTORIZACION><COD_RTA>03</COD_RTA></return></ns2:pgmactResponse></soap:Body></soap:Envelope>`;
+
 const SUPPORTED_PROTOCOLS = ['ISO8583', 'WEBSERVICE', 'REST'] as const;
 const SUPPORTED_HEADER_TYPES = ['auto', 'ascii4', 'bin16', 'none'] as const;
 
@@ -95,15 +99,24 @@ try {
   console.error('Error loading service configuration:', (err as Error).message);
   process.exit(1);
 }
-
 function osInfo() {
-  return {
+  const base = {
     hostname: os.hostname(),
     platform: os.platform(),
     type: os.type(),
-    release: os.release(),
-    uptime_seconds: Math.round(os.uptime())
+    release: os.release()
   };
+
+  try {
+    // en plataformas donde uv_uptime no está disponible esto puede lanzar ENOSYS
+    const uptime_seconds = Math.round(os.uptime());
+    return { ...base, uptime_seconds };
+  } catch (err: any) {
+    // Fallback seguro: usar process.uptime() (tiempo desde que arrancó el proceso)
+    console.warn('os.uptime() not available on this platform; using process.uptime() as fallback:', err && err.message);
+    const uptime_seconds = Math.round(process.uptime());
+    return { ...base, uptime_seconds, uptime_fallback: 'process.uptime' };
+  }
 }
 
 /**
@@ -391,15 +404,45 @@ function startIso8583Server(host: string, port: number, cfg?: ServerConfig) {
 /**
  * HTTP server for WEBSERVICE and REST
  */
-function startHttpServer(host: string, port: number, kind: Protocol) {
+function startHttpServer(host: string, port: number, kind: Protocol, cfg: ServerConfig) {
   const app = express();
   app.use(bodyParser.json());
 
   if (kind === 'WEBSERVICE') {
+    app.get(AZ7_CUENTA_TARJETA_PATH, (req, res, next) => {
+      if (!Object.prototype.hasOwnProperty.call(req.query, 'wsdl')) {
+        return next();
+      }
+
+      const endpoint = `${req.protocol}://${req.get('host')}${AZ7_CUENTA_TARJETA_PATH}`;
+      res.type('application/wsdl+xml; charset=utf-8').send(`<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/" xmlns:soap12="http://schemas.xmlsoap.org/wsdl/soap12/" xmlns:tns="${AZ7_CUENTA_TARJETA_NAMESPACE}" targetNamespace="${AZ7_CUENTA_TARJETA_NAMESPACE}">
+  <message name="pgmactRequest"><part name="parameters" element="tns:pgmact"/></message>
+  <message name="pgmactResponse"><part name="parameters" element="tns:pgmactResponse"/></message>
+  <portType name="AZ7_CUENTA_TARJETA">
+    <operation name="pgmact"><input message="tns:pgmactRequest"/><output message="tns:pgmactResponse"/></operation>
+  </portType>
+  <binding name="AZ7_CUENTA_TARJETABinding" type="tns:AZ7_CUENTA_TARJETA">
+    <soap12:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="pgmact"><soap12:operation soapAction=""/><input><soap12:body use="literal"/></input><output><soap12:body use="literal"/></output></operation>
+  </binding>
+  <service name="AZ7_CUENTA_TARJETAService">
+    <port name="AZ7_CUENTA_TARJETA" binding="tns:AZ7_CUENTA_TARJETABinding">
+      <soap12:address location="${endpoint}"/>
+    </port>
+  </service>
+</definitions>`);
+    });
+
+    app.post(AZ7_CUENTA_TARJETA_PATH, bodyParser.text({ type: ['text/xml', 'application/soap+xml'] }), (_req, res) => {
+      res.set('Content-Type', 'application/soap+xml; charset=UTF-8').status(200).send(AZ7_CUENTA_TARJETA_RESPONSE);
+    });
+
     app.get('/ws', (req, res) => {
       const nro = req.query.NroRequerimiento || req.query.nro || null;
       return res.json({
         protocol: 'WEBSERVICE',
+        description: cfg.description,
         requestNumber: nro,
         message: 'hola mundo',
         os: osInfo()
@@ -418,6 +461,7 @@ function startHttpServer(host: string, port: number, kind: Protocol) {
       const nro = req.query.NroRequerimiento || req.query.nro || null;
       return res.json({
         protocol: 'REST',
+        description: cfg.description,
         requestNumber: nro,
         message: 'hola mundo',
         os: osInfo()
@@ -428,6 +472,7 @@ function startHttpServer(host: string, port: number, kind: Protocol) {
       const id = req.params.id;
       res.json({
         protocol: 'REST',
+        description: cfg.description,
         resourceId: id,
         message: 'hola mundo',
         os: osInfo()
@@ -452,7 +497,7 @@ for (const c of configs) {
       break;
     case 'WEBSERVICE':
     case 'REST':
-      startHttpServer(c.host, c.port, c.protocol);
+      startHttpServer(c.host, c.port, c.protocol, c);
       break;
     default:
       console.warn('Unknown protocol for config', c);
